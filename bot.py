@@ -1,33 +1,79 @@
 import os
+import asyncio
 from pyrogram import Client, filters
+from pyrogram.types import Message
 from pytgcalls import PyTgCalls
-from pytgcalls.types.input_stream import AudioPiped
-from pytgcalls.types.input_stream.quality import HighQualityAudio
+from pytgcalls.types import AudioPiped
+from pytgcalls.exceptions import NoActiveGroupCall
 
-API_ID = int(os.getenv("API_ID"))
+# ================== ENV ==================
+API_ID = int(os.getenv("API_ID", "0"))
 API_HASH = os.getenv("API_HASH")
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 
-app = Client("musicbot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
-call = PyTgCalls(app)
+if not API_ID or not API_HASH or not BOT_TOKEN:
+    raise RuntimeError("❌ API_ID / API_HASH / BOT_TOKEN missing")
 
-@app.on_message(filters.command("play") & filters.group)
-async def play(_, msg):
-    if not msg.reply_to_message:
-        await msg.reply("🎵 mp3 file reply করে /play দিন")
-        return
-    audio = await msg.reply_to_message.download()
-    await call.join_group_call(
-        msg.chat.id,
-        AudioPiped(audio, HighQualityAudio()),
+# ================== CLIENTS ==================
+app = Client(
+    "music-bot",
+    api_id=API_ID,
+    api_hash=API_HASH,
+    bot_token=BOT_TOKEN,
+)
+
+call_py = PyTgCalls(app)
+
+# ================== START COMMAND ==================
+@app.on_message(filters.command("start") & filters.private)
+async def start_cmd(_, message: Message):
+    await message.reply_text(
+        "🎧 **Music Bot is Alive!**\n\n"
+        "Start a group voice chat\n"
+        "Reply to an MP3 file with `/play`",
+        quote=True
     )
-    await msg.reply("▶️ Music started")
 
+# ================== PLAY COMMAND ==================
+@app.on_message(filters.command("play") & filters.group)
+async def play_cmd(_, message: Message):
+    if not message.reply_to_message or not message.reply_to_message.audio:
+        await message.reply_text("❌ Reply to an MP3 file and use `/play`")
+        return
+
+    audio = message.reply_to_message.audio
+    file_path = await audio.download()
+
+    chat_id = message.chat.id
+
+    try:
+        await call_py.join_group_call(
+            chat_id,
+            AudioPiped(file_path),
+        )
+        await message.reply_text("▶️ **Music started in voice chat**")
+
+    except NoActiveGroupCall:
+        await message.reply_text("❌ Please start the group voice chat first")
+
+    except Exception as e:
+        await message.reply_text(f"⚠️ Error: `{e}`")
+
+# ================== STOP COMMAND ==================
 @app.on_message(filters.command("stop") & filters.group)
-async def stop(_, msg):
-    await call.leave_group_call(msg.chat.id)
-    await msg.reply("⏹️ Music stopped")
+async def stop_cmd(_, message: Message):
+    try:
+        await call_py.leave_group_call(message.chat.id)
+        await message.reply_text("⏹️ Music stopped")
+    except Exception:
+        await message.reply_text("❌ No active music is playing")
 
-app.start()
-call.start()
-print("Bot running...")
+# ================== MAIN ==================
+async def main():
+    await app.start()
+    await call_py.start()
+    print("✅ Music Bot Started")
+    await asyncio.Event().wait()
+
+if __name__ == "__main__":
+    asyncio.run(main())
